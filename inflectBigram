@@ -1,0 +1,79 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Outputs a fully inflected version of a lemmatized test set (provided on STDIN). 
+If training data is provided, it will use a unigram model to select the form.
+
+usage: cat LEMMA_FILE | python inflect
+       [-t TRAINING_PREFIX] [-l LEMMA_SUFFIX] [-w WORD_SUFFIX]
+"""
+
+import argparse
+import codecs
+import sys
+import os
+from collections import defaultdict
+from itertools import izip
+
+PARSER = argparse.ArgumentParser(description="Inflect a lemmatized corpus")
+PARSER.add_argument("-t", type=str, default="data/train", help="training data prefix")
+PARSER.add_argument("-l", type=str, default="lemma", help="lemma file suffix")
+PARSER.add_argument("-w", type=str, default="form", help="word file suffix")
+PARSER.add_argument("-p", type=str, default="tag", help="tag file suffix")
+args = PARSER.parse_args()
+
+# Python sucks at UTF-8
+sys.stdout = codecs.getwriter('utf-8')(sys.stdout) 
+sys.stdin = codecs.getreader('utf-8')(sys.stdin) 
+
+# Build a model on the training data
+LEMMAS = defaultdict(defaultdict)
+LEMMASC = defaultdict(defaultdict)
+LEMMASP = defaultdict(defaultdict)
+LEMMASPC = defaultdict(defaultdict)
+FINAL = defaultdict(defaultdict)
+def combine(a, b): return '%s.%s' % (a, b)
+if args.t:
+    def utf8read(file): return codecs.open(file, 'r', 'utf-8')
+    for words, lemmas in izip(utf8read(combine(args.t, args.w)), utf8read(combine(args.t, args.l))):
+        prev = "<start>"
+        for word, lemma in izip(words.rstrip().split(), lemmas.rstrip().split()):
+            LEMMAS[lemma][word] = LEMMAS[lemma].get(word,0) + 1
+            LEMMASC[combine(prev,lemma)][word] = LEMMASC[combine(prev,lemma)].get(word,0) + 1
+            prev = lemma
+    for words, poss in izip(utf8read(combine(args.t, args.w)), utf8read(combine(args.t, args.p))):
+        prev = "<start>"
+        for word, pos in izip(words.rstrip().split(), poss.rstrip().split()):
+            LEMMASP[word][pos] = LEMMASP[word].get(pos,0) + 1
+            LEMMASPC[word][combine(prev,pos)] = LEMMASPC[word].get(combine(prev,pos),0) + 1
+            prev = pos
+    for lemma in LEMMAS:
+        for word in LEMMAS[lemma]:
+            for pos in LEMMASP[word]:
+                FINAL[combine(lemma,pos)][word] = min(LEMMAS[lemma][word],LEMMASP[word][pos])
+            for prev_pos in LEMMASPC[word]:
+                FINAL[combine(lemma,prev_pos)][word] = min(LEMMAS[lemma][word],LEMMASPC[word][prev_pos])
+    for prev_lemma in LEMMASC:
+        for word in LEMMASC[lemma]:
+            for pos in LEMMASP[word]:
+                FINAL[combine(prev_lemma,pos)][word] = min(LEMMASC[prev_lemma][word] * LEMMASP[word][pos])
+            for prev_pos in LEMMASPC[word]:
+                FINAL[combine(prev_lemma,prev_pos)] = min(LEMMASC[prev_lemma][word] * LEMMASPC[word][prev_pos])
+        
+
+def best_inflection(prev, lemma):
+    if LEMMAS.has_key(combine(prev,lemma)):
+        return sorted(LEMMAS[combine(prev,lemma)].keys(), lambda x,y: cmp(LEMMAS[combine(prev,lemma)][y], LEMMAS[combine(prev,lemma)][x]))[0]
+    elif LEMMAS.has_key(lemma):
+        return sorted(LEMMAS[lemma].keys(), lambda x,y: cmp(LEMMAS[lemma][y], LEMMAS[lemma][x]))[0]
+    return lemma
+
+# Inflect STDIN
+for line in sys.stdin:
+    prev = "<start>"
+    prev_pos = "<start>"
+    final = []
+    for x in line.rstrip().split():
+        final.append(best_inflection(prev,x))
+        prev = x
+    print ' '.join(final)
